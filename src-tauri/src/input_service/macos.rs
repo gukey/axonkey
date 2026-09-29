@@ -1819,6 +1819,27 @@ mod tests {
     }
 
     #[test]
+    fn modifier_only_shortcut_uses_continuous_chord_with_combined_flags() {
+        let settings: NativeSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "behaviors": { "menu": {
+                "click": [{ "type": "shortcut", "keys": ["Ctrl", "Alt"] }]
+            }}
+        }))
+        .unwrap();
+        let control = FLAG_CONTROL | FLAG_DEVICE_LEFT_CONTROL;
+        let option = FLAG_OPTION | FLAG_DEVICE_LEFT_OPTION;
+        let keys = continuous_click_chord(&settings.behaviors["menu"]).unwrap();
+        assert_eq!(
+            keys,
+            vec![MacKey::modifier(59, control), MacKey::modifier(58, option)]
+        );
+        assert_eq!(press_flags(&keys), vec![control, control | option]);
+        // A multi-modifier chord must use software handling, not a single-key HID remap.
+        assert!(hardware_modifier_mappings(&settings).is_empty());
+    }
+
+    #[test]
     fn keeps_gesture_detection_for_multi_trigger_mappings() {
         let mut triggers = TriggerBehaviors::default();
         triggers.click.push(NativeBehavior::Key {

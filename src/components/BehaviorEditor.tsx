@@ -269,8 +269,9 @@ function ManualKeySelect({ platform, value, onChange, label, includeModifiers = 
   const groups = includeModifiers ? platformGroups : platformGroups.filter((group) => group.label !== '单独修饰键')
   const knownValue = groups.some((group) => group.options.some((option) => option.value === value)) ? value : ''
   return <div className="manual-key-select">
-    <select value={knownValue} aria-label={label} onChange={(event) => onChange(event.target.value)}>
-      <option value="" disabled>{value && !knownValue ? `当前：${keyDisplayName(value, platform)}` : '选择按键'}</option>
+    <select value={value} aria-label={label} onChange={(event) => onChange(event.target.value)}>
+      {value && !knownValue && <option value={value} disabled>{`当前：${keyDisplayName(value, platform)}`}</option>}
+      <option value="">空</option>
       {groups.map((group) => <optgroup key={group.label} label={group.label}>
         {group.options.map((option) => <option key={`${group.label}-${option.value}`} value={option.value}>{option.label}</option>)}
       </optgroup>)}
@@ -279,7 +280,12 @@ function ManualKeySelect({ platform, value, onChange, label, includeModifiers = 
   </div>
 }
 
-export function BehaviorEditDialog({ platform, button, trigger, behavior, capturing, draft = false, onStartCapture, onCancelCapture, onCaptureKey, onUpdate, onClose, onSave }: BehaviorEditDialogProps) {
+export function BehaviorEditDialog({ platform, button, trigger, behavior: savedBehavior, capturing, draft = false, onStartCapture, onCancelCapture, onCaptureKey, onUpdate, onClose, onSave }: BehaviorEditDialogProps) {
+  // Existing behaviors autosave; keep an incomplete manual selection local.
+  const [emptyShortcut, setEmptyShortcut] = useState(false)
+  const behavior: Behavior = emptyShortcut
+    ? { id: savedBehavior.id, enabled: savedBehavior.enabled, type: 'shortcut', keys: [] }
+    : savedBehavior
   const captureValue = behavior.type === 'shortcut'
     ? behavior.keys.map((key) => keyDisplayName(key, platform)).join(' + ')
     : behavior.type === 'key' ? keyDisplayName(behavior.key, platform) : ''
@@ -288,13 +294,18 @@ export function BehaviorEditDialog({ platform, button, trigger, behavior, captur
   const shortcutBase = behavior.type === 'key'
     ? behavior.key
     : shortcutKeys.find((key) => !shortcutModifiers.includes(key))
-      ?? (shortcutKeys.length === 1 && isStandaloneModifierKey(shortcutKeys[0]) ? shortcutKeys[0] : 'C')
+      ?? ''
   const standaloneBase = isStandaloneModifierKey(shortcutBase)
   const setShortcut = (modifiers: string[], base: string) => {
     const selectedModifiers = isStandaloneModifierKey(base) ? [] : modifiers.filter((modifier) => modifier !== base)
+    if (!draft && selectedModifiers.length === 0 && !base) {
+      setEmptyShortcut(true)
+      return
+    }
+    setEmptyShortcut(false)
     onUpdate((current) => current.type === 'key' || current.type === 'shortcut'
-      ? selectedModifiers.length > 0
-        ? { id: current.id, enabled: current.enabled, type: 'shortcut', keys: [...selectedModifiers, base] }
+      ? selectedModifiers.length > 0 || !base
+        ? { id: current.id, enabled: current.enabled, type: 'shortcut', keys: base ? [...selectedModifiers, base] : selectedModifiers }
         : { id: current.id, enabled: current.enabled, type: 'key', key: base }
       : current)
   }
@@ -321,13 +332,13 @@ export function BehaviorEditDialog({ platform, button, trigger, behavior, captur
         {behavior.type === 'key' || behavior.type === 'shortcut' ? <>
           <div className="behavior-current-value"><span>当前按键</span><strong>{captureValue || '未设置'}</strong></div>
           <div className="behavior-record-row">
-            <button type="button" autoFocus={draft && capturing} className={`record-key-button ${capturing ? 'capturing' : ''}`} onClick={capturing ? onCancelCapture : onStartCapture}>
+            <button type="button" autoFocus={draft && capturing} className={`record-key-button ${capturing ? 'capturing' : ''}`} onClick={capturing ? onCancelCapture : () => { setEmptyShortcut(false); onStartCapture() }}>
               <Keyboard size={17} />
               <span><strong>{capturing ? '等待按键输入…' : '开始录入'}</strong><small>{capturing ? '现在按下目标按键或组合键' : '仅在点击后监听下一次按键'}</small></span>
             </button>
           </div>
           <div className="behavior-manual-section">
-            <div className="behavior-field-title"><strong>手动选择</strong><span>{standaloneBase ? '当前仅发送这个按键' : '录入不到时直接从列表设置'}</span></div>
+            <div className="behavior-field-title"><strong>手动选择</strong><span>{!shortcutBase ? '仅发送左侧选中的修饰键' : standaloneBase ? '当前仅发送这个按键' : '录入不到时直接从列表设置'}</span></div>
             <div className={`shortcut-manual-builder ${standaloneBase ? 'standalone' : ''}`}>
               <div className="shortcut-modifiers">
                 {shortcutModifiers.map((modifier) => {
@@ -399,7 +410,7 @@ export function BehaviorEditDialog({ platform, button, trigger, behavior, captur
         /></div> : behavior.type === 'delay' ? <div className="behavior-dialog-field"><label htmlFor="behavior-delay-ms">等待时间</label><div className="behavior-delay-row"><Clock3 size={16} /><input id="behavior-delay-ms" className="behavior-delay-input" autoFocus={draft} type="number" min="0" max="300000" step="10" value={behavior.ms} onChange={(event) => onUpdate((current) => current.type === 'delay' ? { ...current, ms: Math.max(0, Math.min(300000, Number(event.target.value) || 0)) } : current)} /><span>毫秒</span></div></div> : <div className="behavior-dialog-field">这个行为不需要编辑。</div>}
       </div>
       <footer className="behavior-dialog-actions">
-        <span><Check size={13} /> {draft ? '保存后立即生效' : '更改会自动保存'}</span>
+        <span><Check size={13} /> {emptyShortcut ? '请选择至少一个按键，关闭保留原配置' : draft ? '保存后立即生效' : '更改会自动保存'}</span>
         {draft ? <div className="behavior-dialog-buttons"><button type="button" className="dialog-secondary" onClick={onClose}>取消</button><button type="button" className="button primary" disabled={!canSave} onClick={onSave}>保存</button></div> : <button type="button" className="button primary" onClick={onClose}>关闭</button>}
       </footer>
     </section>

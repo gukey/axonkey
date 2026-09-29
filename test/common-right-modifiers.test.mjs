@@ -30,7 +30,8 @@ function load(file) {
   return module.exports
 }
 
-const { BehaviorEditor } = load('src/components/BehaviorEditor.tsx')
+const { BehaviorEditor, BehaviorEditDialog } = load('src/components/BehaviorEditor.tsx')
+const { normalizeBehavior } = load('src/behaviorModel.ts')
 const { keyDisplayName, rightModifierChoices, isRightModifierPreset, rightModifierKeys } = load('src/appConfig.tsx')
 
 const button = { id: 'menu', label: '菜单', icon: 'menu' }
@@ -103,3 +104,108 @@ test('common behaviors offer the right-side modifiers with platform names', () =
     act(() => windows.view.unmount())
   }
 })
+
+function renderDialog(platform, initial, draft = true) {
+  let behavior = initial
+  let view
+  const props = {
+    platform, button, trigger: 'click', capturing: false, draft,
+    onStartCapture() {}, onCancelCapture() {}, onCaptureKey() {}, onClose() {}, onSave() {},
+    onUpdate(update) {
+      behavior = update(behavior)
+      view.update(React.createElement(BehaviorEditDialog, { ...props, behavior }))
+    },
+  }
+  act(() => { view = Renderer.create(React.createElement(BehaviorEditDialog, { ...props, behavior })) })
+  return {
+    view,
+    behavior: () => JSON.parse(JSON.stringify(behavior)),
+    select: value => act(() => view.root.findByType('select').props.onChange({ target: { value } })),
+    toggle: label => act(() => view.root.findAllByType('button').find(node => text(node) === label).props.onClick()),
+    save: () => view.root.findAllByType('button').find(node => text(node) === '保存'),
+  }
+}
+
+for (const platform of ['macos', 'windows']) {
+  test(`${platform}: editing keeps an incomplete selection out of autosaved settings`, () => {
+    const initial = { id: 'chord', enabled: true, type: 'key', key: 'C' }
+    const dialog = renderDialog(platform, initial, false)
+    try {
+      dialog.select('')
+      assert.deepEqual(dialog.behavior(), initial)
+      assert.equal(dialog.view.root.findByType('select').props.value, '')
+      assert.equal(text(dialog.view.root.findByProps({ className: 'behavior-current-value' })), '当前按键未设置')
+      dialog.toggle('Shift')
+      assert.deepEqual(dialog.behavior(), { id: 'chord', enabled: true, type: 'shortcut', keys: ['Shift'] })
+      dialog.toggle('Shift')
+      assert.deepEqual(dialog.behavior().keys, ['Shift'])
+      dialog.select('Enter')
+      assert.deepEqual(dialog.behavior(), { ...initial, key: 'Enter' })
+    } finally {
+      act(() => dialog.view.unmount())
+    }
+  })
+
+  test(`${platform}: empty base preserves selected modifiers through save and reopen`, () => {
+    const initial = { id: 'chord', enabled: true, type: 'shortcut', keys: ['Ctrl', 'Alt', 'C'] }
+    const dialog = renderDialog(platform, initial)
+    let reopened
+    try {
+      const empty = dialog.view.root.findAllByType('option').find(node => node.props.value === '')
+      assert.equal(text(empty), '空')
+      assert.ok(!empty.props.disabled)
+      dialog.select('')
+      assert.deepEqual(dialog.behavior(), { ...initial, keys: ['Ctrl', 'Alt'] })
+      assert.equal(dialog.save().props.disabled, false)
+      const persisted = normalizeBehavior(JSON.parse(JSON.stringify(dialog.behavior())))
+      reopened = renderDialog(platform, persisted)
+      assert.equal(reopened.view.root.findByType('select').props.value, '')
+      assert.equal(text(reopened.view.root.findByProps({ className: 'behavior-current-value' })),
+        platform === 'macos' ? '当前按键Control + Option' : '当前按键Ctrl + Alt')
+      reopened.select('V')
+      assert.deepEqual(reopened.behavior(), { ...initial, keys: ['Ctrl', 'Alt', 'V'] })
+    } finally {
+      act(() => dialog.view.unmount())
+      if (reopened) act(() => reopened.view.unmount())
+    }
+  })
+
+  test(`${platform}: empty base supports one modifier and disables saving an empty chord`, () => {
+    const dialog = renderDialog(platform, { id: 'chord', enabled: true, type: 'key', key: 'C' })
+    try {
+      dialog.select('')
+      assert.deepEqual(dialog.behavior().keys, [])
+      assert.equal(dialog.save().props.disabled, true)
+      dialog.toggle('Shift')
+      assert.deepEqual(dialog.behavior().keys, ['Shift'])
+      assert.equal(dialog.view.root.findByType('select').props.value, '')
+      assert.equal(dialog.save().props.disabled, false)
+      dialog.toggle(keyDisplayName('Ctrl', platform))
+      assert.deepEqual(dialog.behavior().keys, ['Ctrl', 'Shift'])
+      dialog.toggle('Shift')
+      dialog.toggle(keyDisplayName('Ctrl', platform))
+      assert.deepEqual(dialog.behavior().keys, [])
+      assert.equal(dialog.save().props.disabled, true)
+      dialog.select('Enter')
+      assert.equal(dialog.behavior().type, 'key')
+      assert.equal(dialog.behavior().key, 'Enter')
+      assert.equal(dialog.save().props.disabled, false)
+    } finally {
+      act(() => dialog.view.unmount())
+    }
+  })
+
+  test(`${platform}: standalone modifiers remain independent and can switch to an empty base`, () => {
+    const dialog = renderDialog(platform, { id: 'chord', enabled: true, type: 'shortcut', keys: ['Ctrl', 'Alt'] })
+    try {
+      dialog.select('RCtrl')
+      assert.deepEqual(dialog.behavior(), { id: 'chord', enabled: true, type: 'key', key: 'RCtrl' })
+      assert.ok(dialog.view.root.findAllByProps({ 'aria-pressed': false }).every(node => node.props.disabled))
+      dialog.select('')
+      dialog.toggle('Shift')
+      assert.deepEqual(dialog.behavior().keys, ['Shift'])
+    } finally {
+      act(() => dialog.view.unmount())
+    }
+  })
+}
