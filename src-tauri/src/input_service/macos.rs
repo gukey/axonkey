@@ -613,6 +613,17 @@ fn press_flags(keys: &[MacKey]) -> Vec<u64> {
         .collect()
 }
 
+fn release_flags(keys: &[MacKey]) -> Vec<u64> {
+    (0..keys.len())
+        .rev()
+        .map(|remaining| {
+            keys[..remaining]
+                .iter()
+                .fold(0, |flags, key| flags | key.modifier_flag())
+        })
+        .collect()
+}
+
 impl PressedChord {
     fn press(keys: &[MacKey]) -> Self {
         log::info!(target: "axonkey::input", "Mapped chord press: keys={keys:?}");
@@ -628,14 +639,8 @@ impl PressedChord {
 
     fn release(&mut self) {
         log::info!(target: "axonkey::input", "Mapped chord release: keys={:?}", self.keys);
-        let mut flags = self
-            .keys
-            .iter()
-            .fold(0, |flags, key| flags | key.modifier_flag());
-        for key in self.keys.iter().copied().rev() {
-            if key.modifier_flag() != 0 {
-                flags &= !key.modifier_flag();
-            }
+        // Left/right modifiers share a flag; retain it until both sides are released.
+        for (key, flags) in self.keys.iter().copied().rev().zip(release_flags(&self.keys)) {
             post_key(key, false, flags, false);
         }
         self.keys.clear();
@@ -1837,6 +1842,52 @@ mod tests {
         assert_eq!(press_flags(&keys), vec![control, control | option]);
         // A multi-modifier chord must use software handling, not a single-key HID remap.
         assert!(hardware_modifier_mappings(&settings).is_empty());
+    }
+
+    #[test]
+    fn releasing_both_modifier_sides_retains_the_remaining_side() {
+        for (left, right) in [
+            ("Ctrl", "RCtrl"),
+            ("Shift", "RShift"),
+            ("Alt", "RAlt"),
+            ("Win", "RWin"),
+        ] {
+            let behavior = NativeBehavior::Shortcut {
+                enabled: true,
+                keys: vec![left.into(), right.into()],
+            };
+            let mut keys = behavior_chord(&behavior).unwrap();
+            assert_eq!(keys.len(), 2);
+            for _ in 0..2 {
+                let first = keys[0].modifier_flag();
+                let both = first | keys[1].modifier_flag();
+                assert_eq!(press_flags(&keys), vec![first, both]);
+                assert_eq!(release_flags(&keys), vec![first, 0]);
+                let mut with_base = keys.clone();
+                with_base.push(MacKey::keyboard(8));
+                assert_eq!(release_flags(&with_base), vec![both, first, 0]);
+                keys.reverse();
+            }
+        }
+        assert!(release_flags(&[]).is_empty());
+    }
+
+    #[test]
+    fn modifier_shortcuts_preserve_independent_sides() {
+        let triggers: TriggerBehaviors = serde_json::from_value(serde_json::json!({
+            "click": [{ "type": "shortcut", "keys": ["RCtrl", "Shift", "RAlt", "Win"] }]
+        }))
+        .unwrap();
+        let keys = continuous_click_chord(&triggers).unwrap();
+        assert_eq!(
+            keys,
+            vec![
+                MacKey::modifier(62, FLAG_CONTROL | FLAG_DEVICE_RIGHT_CONTROL),
+                MacKey::modifier(56, FLAG_SHIFT | FLAG_DEVICE_LEFT_SHIFT),
+                MacKey::modifier(61, FLAG_OPTION | FLAG_DEVICE_RIGHT_OPTION),
+                MacKey::modifier(55, FLAG_COMMAND | FLAG_DEVICE_LEFT_COMMAND),
+            ]
+        );
     }
 
     #[test]

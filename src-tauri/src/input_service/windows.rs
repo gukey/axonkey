@@ -2523,6 +2523,40 @@ mod tests {
     }
 
     #[test]
+    fn modifier_shortcuts_keep_both_sides() {
+        let triggers: TriggerBehaviors = serde_json::from_value(serde_json::json!({
+            "click": [{ "type": "shortcut", "keys": ["Win", "RWin"] }]
+        }))
+        .unwrap();
+        assert_eq!(continuous_click_chord(&triggers), Some(vec![0x5b, 0x5c]));
+    }
+
+    #[test]
+    fn modifier_shortcuts_preserve_independent_sides() {
+        let triggers: TriggerBehaviors = serde_json::from_value(serde_json::json!({
+            "click": [{ "type": "shortcut", "keys": ["RCtrl", "Shift", "RAlt", "Win"] }]
+        }))
+        .unwrap();
+        let keys = continuous_click_chord(&triggers).unwrap();
+        assert_eq!(keys, vec![0xa3, 0x10, 0xa5, 0x5b]);
+        // Scan codes require the real Windows MapVirtualKeyW implementation.
+        #[cfg(target_os = "windows")]
+        {
+            let strokes: Vec<_> = keys
+                .into_iter()
+                .map(|key| {
+                    let stroke = output_stroke(key, false).unwrap();
+                    (stroke.code, stroke.state & KEY_E0)
+                })
+                .collect();
+            assert_eq!(
+                strokes,
+                vec![(0x1d, KEY_E0), (0x2a, 0), (0x38, KEY_E0), (0x5b, KEY_E0)]
+            );
+        }
+    }
+
+    #[test]
     fn holds_a_single_click_key_when_no_other_gesture_is_configured() {
         let mut triggers = TriggerBehaviors::default();
         triggers.click.push(NativeBehavior::Key {

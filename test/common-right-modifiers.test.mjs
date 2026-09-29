@@ -120,20 +120,90 @@ function renderDialog(platform, initial, draft = true) {
   return {
     view,
     behavior: () => JSON.parse(JSON.stringify(behavior)),
-    select: value => act(() => view.root.findByType('select').props.onChange({ target: { value } })),
+    select: value => act(() => view.root.findByProps({ 'aria-label': '选择主按键或单独修饰键' }).props.onChange({ target: { value } })),
+    side: (modifier, value) => act(() => view.root.findByProps({ 'aria-label': `${keyDisplayName(modifier, platform)} 左右侧` }).props.onChange({ target: { value } })),
     toggle: label => act(() => view.root.findAllByType('button').find(node => text(node) === label).props.onClick()),
     save: () => view.root.findAllByType('button').find(node => text(node) === '保存'),
   }
 }
 
 for (const platform of ['macos', 'windows']) {
+  test(`${platform}: both sides can be selected together and retained while editing`, () => {
+    const dialog = renderDialog(platform, { id: 'both', enabled: true, type: 'shortcut', keys: ['Win'] })
+    let reopened
+    try {
+      dialog.side('Win', 'both')
+      assert.deepEqual(dialog.behavior().keys, ['Win', 'RWin'])
+      reopened = renderDialog(platform, normalizeBehavior(dialog.behavior()), false)
+      assert.equal(reopened.view.root.findByProps({ 'aria-label': `${keyDisplayName('Win', platform)} 左右侧` }).props.value, 'both')
+      assert.equal(reopened.view.root.findByProps({ 'aria-label': '选择主按键或单独修饰键' }).props.value, '')
+      reopened.toggle('Shift')
+      reopened.select('C')
+      assert.deepEqual(reopened.behavior().keys, ['Shift', 'Win', 'RWin', 'C'])
+      reopened.side('Win', 'right')
+      assert.deepEqual(reopened.behavior().keys, ['Shift', 'RWin', 'C'])
+      reopened.side('Win', 'both')
+      reopened.toggle(keyDisplayName('Win', platform))
+      assert.deepEqual(reopened.behavior().keys, ['Shift', 'C'])
+      for (const modifier of ['Ctrl', 'Alt', 'Win']) reopened.toggle(keyDisplayName(modifier, platform))
+      for (const modifier of ['Ctrl', 'Shift', 'Alt', 'Win']) reopened.side(modifier, 'both')
+      assert.deepEqual(reopened.behavior().keys, ['Ctrl', 'RCtrl', 'Shift', 'RShift', 'Alt', 'RAlt', 'Win', 'RWin', 'C'])
+    } finally {
+      act(() => dialog.view.unmount())
+      if (reopened) act(() => reopened.view.unmount())
+    }
+  })
+
+  test(`${platform}: each modifier side switches independently and survives reopening`, () => {
+    const initial = { id: 'sides', enabled: true, type: 'shortcut', keys: ['Ctrl', 'Shift', 'Alt', 'Win'] }
+    const dialog = renderDialog(platform, initial)
+    let reopened
+    try {
+      for (const modifier of ['Ctrl', 'Shift', 'Alt', 'Win']) dialog.side(modifier, 'right')
+      assert.deepEqual(dialog.behavior().keys, ['RCtrl', 'RShift', 'RAlt', 'RWin'])
+      assert.equal(dialog.view.root.findByProps({ 'aria-label': '选择主按键或单独修饰键' }).props.value, '')
+      dialog.side('Shift', 'left')
+      dialog.side('Alt', 'left')
+      assert.deepEqual(dialog.behavior().keys, ['RCtrl', 'Shift', 'Alt', 'RWin'])
+      const persisted = normalizeBehavior(JSON.parse(JSON.stringify(dialog.behavior())))
+      reopened = renderDialog(platform, persisted, false)
+      for (const [modifier, side] of [['Ctrl', 'right'], ['Shift', 'left'], ['Alt', 'left'], ['Win', 'right']]) {
+        const select = reopened.view.root.findByProps({ 'aria-label': `${keyDisplayName(modifier, platform)} 左右侧` })
+        assert.equal(select.props.value, side)
+        assert.equal(select.props.disabled, false)
+      }
+      reopened.select('C')
+      assert.deepEqual(reopened.behavior().keys, ['RCtrl', 'Shift', 'Alt', 'RWin', 'C'])
+      reopened.toggle(keyDisplayName('Ctrl', platform))
+      assert.deepEqual(reopened.behavior().keys, ['Shift', 'Alt', 'RWin', 'C'])
+      reopened.side('Win', 'left')
+      assert.deepEqual(reopened.behavior().keys, ['Shift', 'Alt', 'Win', 'C'])
+    } finally {
+      act(() => dialog.view.unmount())
+      if (reopened) act(() => reopened.view.unmount())
+    }
+  })
+
+  test(`${platform}: existing explicit left Alt remains a modifier when editing other keys`, () => {
+    const dialog = renderDialog(platform, { id: 'left', enabled: true, type: 'shortcut', keys: ['LAlt', 'RWin', 'V'] })
+    try {
+      assert.equal(dialog.view.root.findByProps({ 'aria-label': '选择主按键或单独修饰键' }).props.value, 'V')
+      dialog.toggle(keyDisplayName('Ctrl', platform))
+      assert.deepEqual(dialog.behavior().keys, ['Ctrl', 'LAlt', 'RWin', 'V'])
+      dialog.side('Alt', 'right')
+      assert.deepEqual(dialog.behavior().keys, ['Ctrl', 'RAlt', 'RWin', 'V'])
+    } finally {
+      act(() => dialog.view.unmount())
+    }
+  })
+
   test(`${platform}: editing keeps an incomplete selection out of autosaved settings`, () => {
     const initial = { id: 'chord', enabled: true, type: 'key', key: 'C' }
     const dialog = renderDialog(platform, initial, false)
     try {
       dialog.select('')
       assert.deepEqual(dialog.behavior(), initial)
-      assert.equal(dialog.view.root.findByType('select').props.value, '')
+      assert.equal(dialog.view.root.findByProps({ 'aria-label': '选择主按键或单独修饰键' }).props.value, '')
       assert.equal(text(dialog.view.root.findByProps({ className: 'behavior-current-value' })), '当前按键未设置')
       dialog.toggle('Shift')
       assert.deepEqual(dialog.behavior(), { id: 'chord', enabled: true, type: 'shortcut', keys: ['Shift'] })
@@ -159,7 +229,7 @@ for (const platform of ['macos', 'windows']) {
       assert.equal(dialog.save().props.disabled, false)
       const persisted = normalizeBehavior(JSON.parse(JSON.stringify(dialog.behavior())))
       reopened = renderDialog(platform, persisted)
-      assert.equal(reopened.view.root.findByType('select').props.value, '')
+      assert.equal(reopened.view.root.findByProps({ 'aria-label': '选择主按键或单独修饰键' }).props.value, '')
       assert.equal(text(reopened.view.root.findByProps({ className: 'behavior-current-value' })),
         platform === 'macos' ? '当前按键Control + Option' : '当前按键Ctrl + Alt')
       reopened.select('V')
@@ -178,7 +248,7 @@ for (const platform of ['macos', 'windows']) {
       assert.equal(dialog.save().props.disabled, true)
       dialog.toggle('Shift')
       assert.deepEqual(dialog.behavior().keys, ['Shift'])
-      assert.equal(dialog.view.root.findByType('select').props.value, '')
+      assert.equal(dialog.view.root.findByProps({ 'aria-label': '选择主按键或单独修饰键' }).props.value, '')
       assert.equal(dialog.save().props.disabled, false)
       dialog.toggle(keyDisplayName('Ctrl', platform))
       assert.deepEqual(dialog.behavior().keys, ['Ctrl', 'Shift'])

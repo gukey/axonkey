@@ -264,6 +264,10 @@ type BehaviorEditDialogProps = {
   onSave?: () => void
 }
 
+function shortcutModifierFamily(key: string) {
+  return shortcutModifiers.find((modifier) => key === modifier || key === `R${modifier}` || (modifier === 'Alt' && key === 'LAlt'))
+}
+
 function ManualKeySelect({ platform, value, onChange, label, includeModifiers = true }: { platform: Platform; value: string; onChange: (value: string) => void; label: string; includeModifiers?: boolean }) {
   const platformGroups = keyGroupsForPlatform(platform)
   const groups = includeModifiers ? platformGroups : platformGroups.filter((group) => group.label !== '单独修饰键')
@@ -290,10 +294,10 @@ export function BehaviorEditDialog({ platform, button, trigger, behavior: savedB
     ? behavior.keys.map((key) => keyDisplayName(key, platform)).join(' + ')
     : behavior.type === 'key' ? keyDisplayName(behavior.key, platform) : ''
   const shortcutKeys = behavior.type === 'shortcut' ? behavior.keys : []
-  const selectedShortcutModifiers = shortcutModifiers.filter((modifier) => shortcutKeys.includes(modifier))
+  const selectedShortcutModifiers = shortcutKeys.filter((key) => shortcutModifierFamily(key))
   const shortcutBase = behavior.type === 'key'
     ? behavior.key
-    : shortcutKeys.find((key) => !shortcutModifiers.includes(key))
+    : shortcutKeys.find((key) => !shortcutModifierFamily(key))
       ?? ''
   const standaloneBase = isStandaloneModifierKey(shortcutBase)
   const setShortcut = (modifiers: string[], base: string) => {
@@ -308,6 +312,12 @@ export function BehaviorEditDialog({ platform, button, trigger, behavior: savedB
         ? { id: current.id, enabled: current.enabled, type: 'shortcut', keys: base ? [...selectedModifiers, base] : selectedModifiers }
         : { id: current.id, enabled: current.enabled, type: 'key', key: base }
       : current)
+  }
+  const setModifier = (modifier: string, keys: string[]) => {
+    onCancelCapture()
+    setShortcut(shortcutModifiers.flatMap((family) => family === modifier
+      ? keys
+      : selectedShortcutModifiers.filter((key) => shortcutModifierFamily(key) === family)), shortcutBase)
   }
   const canSave = behavior.type === 'key'
     ? Boolean(behavior.key)
@@ -338,16 +348,28 @@ export function BehaviorEditDialog({ platform, button, trigger, behavior: savedB
             </button>
           </div>
           <div className="behavior-manual-section">
-            <div className="behavior-field-title"><strong>手动选择</strong><span>{!shortcutBase ? '仅发送左侧选中的修饰键' : standaloneBase ? '当前仅发送这个按键' : '录入不到时直接从列表设置'}</span></div>
+            <div className="behavior-field-title"><strong>手动选择</strong><span>{!shortcutBase ? '仅发送选中的修饰键' : standaloneBase ? '当前仅发送这个按键' : '录入不到时直接从列表设置'}</span></div>
             <div className={`shortcut-manual-builder ${standaloneBase ? 'standalone' : ''}`}>
               <div className="shortcut-modifiers">
                 {shortcutModifiers.map((modifier) => {
-                  const selected = selectedShortcutModifiers.includes(modifier)
-                  return <button key={modifier} type="button" disabled={standaloneBase} className={selected ? 'selected' : ''} aria-pressed={selected} onClick={() => {
-                    onCancelCapture()
-                    const modifiers = shortcutModifiers.filter((item) => item === modifier ? !selected : selectedShortcutModifiers.includes(item))
-                    setShortcut(modifiers, shortcutBase)
-                  }}>{keyDisplayName(modifier, platform)}</button>
+                  const selected = selectedShortcutModifiers.some((key) => shortcutModifierFamily(key) === modifier)
+                  const rightKey = `R${modifier}`
+                  const hasRight = selectedShortcutModifiers.includes(rightKey)
+                  const hasLeft = selectedShortcutModifiers.some((key) => shortcutModifierFamily(key) === modifier && key !== rightKey)
+                  return <div key={modifier} className="shortcut-modifier-choice">
+                    <button type="button" disabled={standaloneBase} className={selected ? 'selected' : ''} aria-pressed={selected} onClick={() => setModifier(modifier, selected ? [] : [modifier])}>{keyDisplayName(modifier, platform)}</button>
+                    <div className="manual-key-select modifier-side-select">
+                      <select
+                        aria-label={`${keyDisplayName(modifier, platform)} 左右侧`}
+                        disabled={standaloneBase || !selected}
+                        value={hasLeft && hasRight ? 'both' : hasRight ? 'right' : 'left'}
+                        onChange={(event) => setModifier(modifier, event.target.value === 'both' ? [modifier, rightKey] : [event.target.value === 'right' ? rightKey : modifier])}
+                      >
+                        <option value="left">左</option><option value="right">右</option><option value="both">左右同时</option>
+                      </select>
+                      <span className="manual-key-select-icon" aria-hidden="true"><ChevronDown size={12} /></span>
+                    </div>
+                  </div>
                 })}
               </div>
               <span className="shortcut-plus">+</span>
