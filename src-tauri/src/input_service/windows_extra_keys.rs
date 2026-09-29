@@ -186,16 +186,16 @@ impl ExtraKeysService {
         }
         let mut framed = Frames::default();
         let mut authenticated = false;
-        let mut last = Instant::now();
+        let mut last = os::awake_ticks();
         while self.current(generation) {
             if !os::alive(&process) {
                 return Err("按键辅助进程已退出，请重新授权。".into());
             }
-            if last.elapsed() > Duration::from_secs(35) {
+            if os::awake_ticks().saturating_sub(last) > 35 * 10_000_000 {
                 return Err("按键服务失去响应，请关闭后重试。".into());
             }
             for message in framed.read(&mut stream)? {
-                last = Instant::now();
+                last = os::awake_ticks();
                 if !authenticated {
                     if message["kind"] != "hello" || message["token"].as_str() != Some(&token) {
                         return Err("按键辅助进程身份验证失败。".into());
@@ -618,7 +618,7 @@ fn capture(parent: &mut PipeStream, stop: &AtomicBool) -> Result<(), String> {
         )?;
         let mut input = ExtraKeyStream::default();
         let mut frames = Frames::default();
-        let mut heartbeat = Instant::now();
+        let mut heartbeat = os::awake_ticks();
         let mut probe = Instant::now();
         let mut capture_ready = false;
         let session: Result<(), String> = (|| {
@@ -632,7 +632,7 @@ fn capture(parent: &mut PipeStream, stop: &AtomicBool) -> Result<(), String> {
                     send(parent, &json!({"kind":"heartbeat"}))?;
                     probe = Instant::now();
                 }
-                if heartbeat.elapsed() > Duration::from_secs(15) {
+                if os::awake_ticks().saturating_sub(heartbeat) > 15 * 10_000_000 {
                     return Err(if capture_ready {
                         "按键采集失去响应，请关闭后重试。"
                     } else {
@@ -649,7 +649,7 @@ fn capture(parent: &mut PipeStream, stop: &AtomicBool) -> Result<(), String> {
                             if message["hook_installed"] != true {
                                 return Err("Windows 未允许启用按键采集。".into());
                             }
-                            heartbeat = Instant::now();
+                            heartbeat = os::awake_ticks();
                             if !capture_ready {
                                 // Publish readiness before any key in this same batch:
                                 // the parent only accepts keys while the service is ready.
