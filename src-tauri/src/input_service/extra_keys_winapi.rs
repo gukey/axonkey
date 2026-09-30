@@ -84,6 +84,13 @@ pub fn process_id(handle: &OwnedHandle) -> u32 {
 pub fn alive(handle: &OwnedHandle) -> bool {
     unsafe { WaitForSingleObject(handle.0, 0) == 258 }
 }
+
+/// Monotonic time spent awake, in 100 ns units. Windows excludes suspended time.
+pub fn awake_ticks() -> u64 {
+    let mut ticks = 0;
+    unsafe { QueryUnbiasedInterruptTime(&mut ticks) };
+    ticks
+}
 pub fn elevated() -> bool {
     unsafe { IsUserAnAdmin() != 0 }
 }
@@ -395,6 +402,7 @@ fn set_acl(path: &Path, descriptor_text: &str) -> Result<(), String> {
 #[link(name = "kernel32")]
 extern "system" {
     fn CloseHandle(h: Handle) -> i32;
+    fn QueryUnbiasedInterruptTime(time: *mut u64) -> i32;
     fn GetProcessId(h: Handle) -> u32;
     fn WaitForSingleObject(h: Handle, ms: u32) -> u32;
     fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
